@@ -1,0 +1,11 @@
+# Personal config, real Notion page ID and deadlines. Never commit this.
+# Copy config.example.py to config.py to get started.
+config.py
+
+# Python
+__pycache__/
+*.pyc
+
+# OS cruft
+.DS_Store
+Thumbs.db
