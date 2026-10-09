@@ -270,6 +270,112 @@ def try_parse_date(raw: str):
         return None
 
 
+# ---------- Task table (the "Brief Tasks" Notion database) ----------
+
+NO_PROJECT_LABEL = "(no project)"
+
+
+def tasks_database_id() -> str:
+    """The Brief Tasks table's ID from config.py, or '' if it isn't set up
+    yet (in which case the older per-project pages are used instead)."""
+    value = str(getattr(config, "TASKS_DATABASE_ID", "") or "").strip()
+    return "" if (not value or value.startswith("PASTE_")) else value
+
+
+def _rich_text_plain(rich) -> str:
+    return "".join(t.get("plain_text", "") for t in (rich or [])).strip()
+
+
+def parse_task_row(row: dict):
+    """
+    One row of the Brief Tasks table becomes (project_name, item), where
+    item has the same shape the rest of the app already uses, plus 'urgent'.
+    Returns None for a row with no task name. Columns are found by name
+    (Project, Due, Done when, Urgent, Time), and the title column by its
+    type, so renaming 'Task' can't break it.
+    """
+    props = row.get("properties", {})
+
+    title = ""
+    for prop in props.values():
+        if prop.get("type") == "title":
+            title = _rich_text_plain(prop.get("title"))
+            break
+    if not title:
+        return None
+
+    select = (props.get("Project") or {}).get("select") or {}
+    project = (select.get("name") or "").strip() or NO_PROJECT_LABEL
+
+    raw_due = ((props.get("Due") or {}).get("date") or {}).get("start")
+    due = None
+    if raw_due:
+        try:
+            due = date.fromisoformat(raw_due[:10])  # date part only, works for date or datetime
+        except ValueError:
+            due = None
+
+    item = {
+        "next_action": title,
+        "done_when": _rich_text_plain((props.get("Done when") or {}).get("rich_text")) or None,
+        "due": due,
+        "raw_due": raw_due,
+        "time": _rich_text_plain((props.get("Time") or {}).get("rich_text")) or None,
+        "urgent": bool((props.get("Urgent") or {}).get("checkbox")),
+    }
+    return project, item
+
+
+def query_task_rows(database_id: str) -> list:
+    """Every row where Done is unchecked, oldest first (so ties in due date
+    keep the order you added the tasks in)."""
+    url = f"https://api.notion.com/v1/databases/{database_id}/query"
+    body = {
+        "page_size": 100,
+        "filter": {"property": "Done", "checkbox": {"equals": False}},
+        "sorts": [{"timestamp": "created_time", "direction": "ascending"}],
+    }
+    rows = []
+    for _ in range(50):  # hard stop so a pagination problem can never loop forever
+        try:
+            resp = requests.post(url, headers=notion_headers(), json=body, timeout=20)
+        except requests.RequestException as e:
+            raise FetchError(f"Notion: could not reach api.notion.com ({e})")
+
+        if resp.status_code == 404:
+            raise FetchError("Notion: the Brief Tasks table was not found (check TASKS_DATABASE_ID in config.py)")
+        if resp.status_code == 401:
+            raise FetchError("Notion: NOTION_API_KEY was rejected (check the token)")
+        if not resp.ok:
+            detail = ""
+            try:
+                detail = resp.json().get("message", "")
+            except Exception:
+                pass
+            raise FetchError(f"Notion: Brief Tasks query failed ({resp.status_code}) {detail}".strip())
+
+        data = resp.json()
+        rows.extend(data.get("results", []))
+        cursor = data.get("next_cursor")
+        if not data.get("has_more") or not cursor:
+            break
+        body = {**body, "start_cursor": cursor}
+    return rows
+
+
+def fetch_tasks_table(database_id: str) -> dict:
+    """{project_name: [items]} for every open row, in the shape the ranking
+    code already expects."""
+    project_items = {}
+    for row in query_task_rows(database_id):
+        parsed = parse_task_row(row)
+        if parsed is None:
+            continue
+        project, item = parsed
+        project_items.setdefault(project, []).append(item)
+    return project_items
+
+
 # ---------- Google Calendar ----------
 
 def get_calendar_access_token():
@@ -337,17 +443,31 @@ def fetch_today_events(today: date):
 
 def format_event_time(raw_start: str) -> str:
     """
-    Plain integer math instead of %-I, which is a Linux/Mac-only strftime
-    extension. Windows has no equivalent flag at all (it uses %#I instead,
-    which would just break the other two platforms the same way %-I broke
-    Windows). This works identically everywhere.
+    '9:30 AM' style time for one calendar event.
+
+    - Plain integer math instead of %-I, which is a Linux/Mac-only strftime
+      extension (Windows has no equivalent flag, it uses %#I). This works
+      identically everywhere.
+    - Google sends an all-day event's start as a bare date ('2026-10-08'),
+      which would otherwise render as a bogus '12:00 AM'. Those say 'all day'.
+    - A time with a UTC offset is converted to the configured timezone, so
+      an event created on a calendar in another zone still shows in local time.
+    - config.TIME_FORMAT = "24h" shows '14:30' instead of '2:30 PM'. Anything
+      else (or no setting at all) keeps the 12-hour AM/PM style.
     """
     try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw_start):
+            return "all day"
         dt = dateparser.parse(raw_start)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo(config.TIMEZONE))
+        if str(getattr(config, "TIME_FORMAT", "12h")).strip().lower() == "24h":
+            return f"{dt.hour:02d}:{dt.minute:02d}"
         hour_12 = dt.hour % 12 or 12
-        return f"{hour_12}:{dt.minute:02d}"
-    except (ValueError, TypeError):
-        return raw_start
+        suffix = "AM" if dt.hour < 12 else "PM"
+        return f"{hour_12}:{dt.minute:02d} {suffix}"
+    except Exception:
+        return raw_start  # a display helper must never be the reason the brief fails
 
 
 # ---------- Ranking ----------
@@ -363,57 +483,93 @@ def soonest_item_for_project(items):
     return items[0]
 
 
+NORMAL_SLOTS = 3  # how many lines the brief aims for before the rotation line
+
+
 def build_top_slots(project_items: dict, today: date):
     """
-    project_items: {project_name: [items]}, in the order they were
-    fetched (the project index's own order, or mock_data's order).
-    Returns (top3, rotation_entry) where top3 is a list of up to 3
-    (project_name, item) tuples and rotation_entry is (project_name, item) or None.
+    project_items: {project_name: [items]}, in the order they were fetched.
+    Returns (top, rotation_entry): top is a list of (project_name, item)
+    and rotation_entry is (project_name, item) or None.
 
-    No ROTATION_ORDER list anymore. Which projects are rotation-eligible
-    (their soonest item has no due date at all) is observed live from
-    project_items itself, every run, rather than asserted in advance in
-    a list that could drift out of sync with reality.
+    Three lanes, in this order:
+      1. URGENT items (item["urgent"]): always shown, soonest due first,
+         undated ones last. They ignore the per-project limit and the
+         three-slot limit, six urgent items means six lines. They count
+         toward the three, so one urgent item leaves two normal slots.
+      2. NORMAL items with a due date, soonest first, filling whatever is
+         left of the three slots, at most PER_PROJECT_LIMIT (default 1)
+         per project so one busy project can't take every slot.
+      3. ROTATION: one item from a project that has nothing dated, picked
+         by day of year so each gets a turn. Always last.
+    Urgent items don't count against the per-project limit, and the
+    rotation pool is worked out from the non-urgent items only.
     """
-    candidates = []
-    no_due_names = []
-    reps = {}
+    per_project_limit = max(1, int(getattr(config, "PER_PROJECT_LIMIT", 1)))
+
+    urgent, normal = [], {}
+    order = 0
     for name, items in project_items.items():
-        rep = soonest_item_for_project(items)
-        if not rep:
-            continue
-        reps[name] = rep
-        if rep["due"] is not None:
-            candidates.append((name, rep))
-        else:
-            no_due_names.append(name)
-    candidates.sort(key=lambda pair: pair[1]["due"])
+        for item in items:
+            order += 1
+            if item.get("urgent"):
+                urgent.append((name, item, order))
+            else:
+                normal.setdefault(name, []).append((item, order))
 
-    top3 = []
-    used_projects = set()
-    for name, item in candidates:
-        if name in used_projects:
-            continue
-        top3.append((name, item))
-        used_projects.add(name)
-        if len(top3) == 3:
+    urgent.sort(key=lambda t: (t[1].get("due") is None, t[1].get("due") or date.max, t[2]))
+    top = [(name, item) for name, item, _ in urgent]
+
+    dated = sorted(
+        ((item["due"], order, name, item)
+         for name, entries in normal.items()
+         for item, order in entries if item.get("due") is not None),
+        key=lambda t: (t[0], t[1]),
+    )
+    slots_left = max(0, NORMAL_SLOTS - len(top))
+    taken = {}
+    for _, _, name, item in dated:
+        if slots_left == 0:
             break
+        if taken.get(name, 0) >= per_project_limit:
+            continue
+        top.append((name, item))
+        taken[name] = taken.get(name, 0) + 1
+        slots_left -= 1
 
-    # A project can only land in no_due_names if it truly has no due date,
-    # so it can never also be in used_projects, but the filter is kept for
-    # safety in case that assumption ever changes.
-    no_due_eligible = [n for n in no_due_names if n not in used_projects]
+    no_due_projects = [
+        name for name, entries in normal.items()
+        if entries and all(item.get("due") is None for item, _ in entries)
+    ]
     rotation_entry = None
-    if no_due_eligible:
-        idx = today.timetuple().tm_yday % len(no_due_eligible)
-        pick = no_due_eligible[idx]
-        rotation_entry = (pick, reps[pick])
+    if no_due_projects:
+        pick = no_due_projects[today.timetuple().tm_yday % len(no_due_projects)]
+        rotation_entry = (pick, normal[pick][0][0])
 
-    return top3, rotation_entry
+    return top, rotation_entry
 
 
 def days_left(target: date, today: date) -> int:
     return (target - today).days
+
+
+def describe_days(n: int) -> str:
+    """Wording for a task's day count. A negative number used to print
+    as '-2 days left'; that is an overdue item and should say so."""
+    if n < 0:
+        return f"{-n} day{'s' if n != -1 else ''} overdue"
+    if n == 0:
+        return "due today"
+    return f"{n} day{'s' if n != 1 else ''} left"
+
+
+def describe_deadline_days(n: int) -> str:
+    """Compact wording for the standing-deadlines line."""
+    if n < 0:
+        return f"{-n}d overdue"
+    if n == 0:
+        return "today"
+    return f"{n}d"
 
 
 # ---------- Formatting ----------
@@ -441,19 +597,22 @@ def format_brief(today: date, events, top3, rotation_entry, empty_projects, fail
 
     n = 1
     for name, item in top3:
-        dl = f" — {days_left(item['due'], today)} days left"
-        lines.append(f"{n}. {item['next_action']}{done_when_suffix(item)} ({name}){dl}")
+        tag = "*(urgent)* " if item.get("urgent") else ""
+        dl = f" — {describe_days(days_left(item['due'], today))}" if item.get("due") else ""
+        lines.append(f"{n}. {tag}{item['next_action']}{done_when_suffix(item)} ({name}){dl}")
         n += 1
     if rotation_entry:
         name, item = rotation_entry
         due_str = f" — due {format_month_day(item['due'])}" if item["due"] else ""
         lines.append(f"{n}. *(rotation)* {item['next_action']}{done_when_suffix(item)} ({name}){due_str}")
+    if not top3 and not rotation_entry:
+        lines.append("No open tasks right now.")
 
     lines.append("")
     dl_parts = []
     for d in config.DEADLINES:
         target = try_parse_date(d["date"])
-        dl_parts.append(f"{d['label']} {days_left(target, today)}d")
+        dl_parts.append(f"{d['label']} {describe_deadline_days(days_left(target, today))}")
     lines.append("**Deadlines:** " + ", ".join(dl_parts))
 
     # Both of these are detected live, every run, never from a hand-maintained
@@ -496,24 +655,32 @@ def gather_brief_data(today: date, mock: bool, skip_calendar: bool = False) -> d
         # entry point always wants the real calendar.
         events = [] if skip_calendar else fetch_today_events(today)
 
-        projects = fetch_project_index(config.INDEX_PAGE_ID)
-        validate_project_list(projects)
+        table_id = tasks_database_id()
+        if table_id:
+            # The Brief Tasks table is the single source once configured.
+            # The older per-project pages are not read at all, so nothing
+            # can show up twice while you are switching over.
+            project_items = fetch_tasks_table(table_id)
+            empty_projects, failed_projects = [], {}
+        else:
+            projects = fetch_project_index(config.INDEX_PAGE_ID)
+            validate_project_list(projects)
 
-        project_items, empty_projects, failed_projects = {}, [], {}
-        for proj in projects:
-            name, page_id = proj["name"], proj["page_id"]
-            try:
-                items = fetch_next_actions(page_id)
-            except FetchError as e:
-                # One bad page (typo'd ID, deleted page, unshared) does not
-                # take the whole brief down. It's reported, not silenced,
-                # but the other projects still run normally.
-                failed_projects[name] = str(e)
-                continue
-            if not items:
-                empty_projects.append(name)
-            else:
-                project_items[name] = items
+            project_items, empty_projects, failed_projects = {}, [], {}
+            for proj in projects:
+                name, page_id = proj["name"], proj["page_id"]
+                try:
+                    items = fetch_next_actions(page_id)
+                except FetchError as e:
+                    # One bad page (typo'd ID, deleted page, unshared) does not
+                    # take the whole brief down. It's reported, not silenced,
+                    # but the other projects still run normally.
+                    failed_projects[name] = str(e)
+                    continue
+                if not items:
+                    empty_projects.append(name)
+                else:
+                    project_items[name] = items
 
     top3, rotation_entry = build_top_slots(project_items, today)
     return {
@@ -552,9 +719,14 @@ def main():
     parser = argparse.ArgumentParser(description="Emmitt's morning brief")
     parser.add_argument("--date", type=str, default=None, help="YYYY-MM-DD, defaults to today")
     parser.add_argument("--mock", action="store_true", help="use mock_data.py, no network calls")
+    parser.add_argument("--table", metavar="ID",
+                         help="try the Brief Tasks table with this ID without editing config.py")
     parser.add_argument("--skip-calendar", action="store_true",
                          help="real Notion, but skip Calendar (for testing before Calendar OAuth is set up)")
     args = parser.parse_args()
+
+    if args.table:
+        config.TASKS_DATABASE_ID = args.table
 
     tz = ZoneInfo(config.TIMEZONE)
     today = dateparser.parse(args.date).date() if args.date else datetime.now(tz).date()

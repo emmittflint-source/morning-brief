@@ -13,10 +13,14 @@ install needed.
 
 import sys
 import tkinter as tk
+from datetime import datetime, timedelta
 from tkinter import font as tkfont
 
 import config
-from morning_brief import days_left, format_event_time, format_month_day
+from morning_brief import (
+    days_left, describe_days, describe_deadline_days,
+    format_event_time, format_month_day,
+)
 
 # Without this, Windows treats the app as DPI-unaware on a scaled display
 # (125%/150%/etc., which is most laptops), renders it at a lower internal
@@ -47,6 +51,36 @@ SOON = "#e0a030"        # <= 7 days left
 LATER = "#7fd88f"       # anything further out
 
 
+MIN_WIDTH, MIN_HEIGHT = 340, 260
+
+
+def compute_resized_geometry(origin, dx, dy, edges, min_w=MIN_WIDTH, min_h=MIN_HEIGHT):
+    """
+    New (x, y, w, h) for a window being dragged by one or two of its edges.
+
+    origin: dict with the window's x, y, w, h when the drag started.
+    dx, dy: how far the mouse has moved since then.
+    edges:  any of "n", "s", "e", "w".
+
+    Dragging the right or bottom edge only changes the size. Dragging the
+    left or top edge changes the size AND moves the window, and the
+    opposite edge must stay exactly where it was, even once the minimum
+    size stops the window from shrinking any further.
+    """
+    x, y, w, h = origin["x"], origin["y"], origin["w"], origin["h"]
+    if "e" in edges:
+        w = max(min_w, origin["w"] + dx)
+    if "w" in edges:
+        w = max(min_w, origin["w"] - dx)
+        x = origin["x"] + (origin["w"] - w)
+    if "s" in edges:
+        h = max(min_h, origin["h"] + dy)
+    if "n" in edges:
+        h = max(min_h, origin["h"] - dy)
+        y = origin["y"] + (origin["h"] - h)
+    return x, y, w, h
+
+
 def _urgency_color(n_days: int) -> str:
     if n_days <= 3:
         return URGENT
@@ -58,6 +92,8 @@ def _urgency_color(n_days: int) -> str:
 def _add_item_line(text_widget, n, item, name, today, is_rotation=False):
     text_widget.insert("end", f"{n}.  ", "item_number")
 
+    if item.get("urgent"):
+        text_widget.insert("end", "URGENT  ", "urgent_tag")
     if is_rotation:
         text_widget.insert("end", "ROTATION  ", "rotation_tag")
 
@@ -76,7 +112,7 @@ def _add_item_line(text_widget, n, item, name, today, is_rotation=False):
             color_tag = "urgency_" + _urgency_color(n_days).lstrip("#")
             text_widget.tag_configure(color_tag, foreground=_urgency_color(n_days))
             text_widget.insert("end", f"  ·  ", "muted")
-            text_widget.insert("end", f"{n_days} day{'s' if n_days != 1 else ''} left", (color_tag, "bold"))
+            text_widget.insert("end", describe_days(n_days), (color_tag, "bold"))
 
     text_widget.insert("end", "\n\n")
 
@@ -101,6 +137,7 @@ def build_brief_view(parent, today, data):
     parent.tag_configure("done_when", font=italic_font, foreground=MUTED)
     parent.tag_configure("project_name", font=small_font, foreground=ACCENT)
     parent.tag_configure("rotation_tag", font=small_font, foreground=ROTATION_COLOR)
+    parent.tag_configure("urgent_tag", font=bold_font, foreground=URGENT)
     parent.tag_configure("warning", font=small_font, foreground=WARNING)
 
     day_str = f"{today.strftime('%a')} {format_month_day(today)}"
@@ -121,12 +158,15 @@ def build_brief_view(parent, today, data):
         name, item = data["rotation_entry"]
         _add_item_line(parent, n, item, name, today, is_rotation=True)
 
+    if not data["top3"] and not data["rotation_entry"]:
+        parent.insert("end", "No open tasks right now.\n\n", "muted")
+
     parent.insert("end", "Deadlines\n", "heading")
     dl_parts = []
     for d in config.DEADLINES:
         from morning_brief import try_parse_date
         target = try_parse_date(d["date"])
-        dl_parts.append(f"{d['label']}: {days_left(target, today)}d")
+        dl_parts.append(f"{d['label']}: {describe_deadline_days(days_left(target, today))}")
     parent.insert("end", "  ·  ".join(dl_parts) + "\n", "muted")
 
     if data["empty_projects"]:
@@ -257,51 +297,65 @@ def show_popup(title: str, text_or_data, is_error: bool = False, today=None):
         body.insert("1.0", text_or_data)
         body.configure(state="disabled")
 
-    # Frameless windows lose the OS's own resize grips along with its
-    # title bar, so these three handles rebuild just that part by hand.
+    # Frameless windows lose the OS's own resize grips along with its title
+    # bar, so these eight handles (four edges, four corners) rebuild them.
     # Uses event.x_root/y_root (absolute screen position) rather than
-    # widget-relative coordinates, so the drag delta stays accurate even
-    # as the window itself changes size mid-drag.
-    MIN_WIDTH, MIN_HEIGHT = 340, 260
-    resize_origin = {"x": 0, "y": 0, "w": 0, "h": 0}
+    # widget-relative coordinates, so the drag stays accurate even while
+    # the window itself moves and changes size mid-drag.
+    resize_origin = {}
+    win = sys.platform == "win32"
+    # name: (edges, Windows cursor, other-platform cursor, place() arguments)
+    grip_specs = {
+        "left":   ("w",  "sb_h_double_arrow", "sb_h_double_arrow",
+                   dict(relx=0.0, rely=0.0, relheight=1.0, width=5, anchor="nw")),
+        "right":  ("e",  "sb_h_double_arrow", "sb_h_double_arrow",
+                   dict(relx=1.0, rely=0.0, relheight=1.0, width=5, anchor="ne")),
+        "top":    ("n",  "sb_v_double_arrow", "sb_v_double_arrow",
+                   dict(relx=0.0, rely=0.0, relwidth=1.0, height=5, anchor="nw")),
+        "bottom": ("s",  "sb_v_double_arrow", "sb_v_double_arrow",
+                   dict(relx=0.0, rely=1.0, relwidth=1.0, height=5, anchor="sw")),
+        # corners last, so they sit on top of the edges where the two overlap
+        "top_left":     ("nw", "size_nw_se", "top_left_corner",
+                         dict(relx=0.0, rely=0.0, width=8, height=8, anchor="nw")),
+        "top_right":    ("ne", "size_ne_sw", "top_right_corner",
+                         dict(relx=1.0, rely=0.0, width=8, height=8, anchor="ne")),
+        "bottom_left":  ("sw", "size_ne_sw", "bottom_left_corner",
+                         dict(relx=0.0, rely=1.0, width=8, height=8, anchor="sw")),
+        "bottom_right": ("se", "size_nw_se", "bottom_right_corner",
+                         dict(relx=1.0, rely=1.0, width=8, height=8, anchor="se")),
+    }
 
-    def start_resize(event):
-        resize_origin["x"] = event.x_root
-        resize_origin["y"] = event.y_root
-        resize_origin["w"] = root.winfo_width()
-        resize_origin["h"] = root.winfo_height()
+    def make_handlers(edges):
+        def start(event):
+            resize_origin.update(px=event.x_root, py=event.y_root,
+                                 x=root.winfo_x(), y=root.winfo_y(),
+                                 w=root.winfo_width(), h=root.winfo_height())
 
-    def resize_right(event):
-        new_w = max(MIN_WIDTH, resize_origin["w"] + (event.x_root - resize_origin["x"]))
-        root.geometry(f"{new_w}x{root.winfo_height()}")
+        def drag(event):
+            x, y, w, h = compute_resized_geometry(
+                resize_origin, event.x_root - resize_origin["px"],
+                event.y_root - resize_origin["py"], edges)
+            root.geometry(f"{w}x{h}+{x}+{y}")
+        return start, drag
 
-    def resize_bottom(event):
-        new_h = max(MIN_HEIGHT, resize_origin["h"] + (event.y_root - resize_origin["y"]))
-        root.geometry(f"{root.winfo_width()}x{new_h}")
+    for grip_name, (edges, cursor_win, cursor_other, place_args) in grip_specs.items():
+        try:
+            grip = tk.Frame(root, bg=header_bg, cursor=cursor_win if win else cursor_other)
+        except tk.TclError:
+            grip = tk.Frame(root, bg=header_bg)   # an unknown cursor name must never stop the window opening
+        grip.place(**place_args)
+        on_press, on_drag = make_handlers(edges)
+        grip.bind("<ButtonPress-1>", on_press)
+        grip.bind("<B1-Motion>", on_drag)
 
-    def resize_corner(event):
-        new_w = max(MIN_WIDTH, resize_origin["w"] + (event.x_root - resize_origin["x"]))
-        new_h = max(MIN_HEIGHT, resize_origin["h"] + (event.y_root - resize_origin["y"]))
-        root.geometry(f"{new_w}x{new_h}")
-
-    grip_right = tk.Frame(root, bg=header_bg, cursor="sb_h_double_arrow", width=4)
-    grip_right.place(relx=1.0, rely=0.0, relheight=1.0, anchor="ne")
-    grip_right.bind("<ButtonPress-1>", start_resize)
-    grip_right.bind("<B1-Motion>", resize_right)
-
-    grip_bottom = tk.Frame(root, bg=header_bg, cursor="sb_v_double_arrow", height=4)
-    grip_bottom.place(relx=0.0, rely=1.0, relwidth=1.0, anchor="sw")
-    grip_bottom.bind("<ButtonPress-1>", start_resize)
-    grip_bottom.bind("<B1-Motion>", resize_bottom)
-
-    # "size_nw_se" is a Windows-only cursor name; X11 has no such name and
-    # raises TclError on it outright, this is exactly what caught the bug
-    # during testing rather than it silently only breaking on Windows.
-    corner_cursor = "size_nw_se" if sys.platform == "win32" else "bottom_right_corner"
-    grip_corner = tk.Frame(root, bg=header_bg, cursor=corner_cursor, width=10, height=10)
-    grip_corner.place(relx=1.0, rely=1.0, anchor="se")
-    grip_corner.bind("<ButtonPress-1>", start_resize)
-    grip_corner.bind("<B1-Motion>", resize_corner)
+    # A popup left open overnight must not block tomorrow's brief: Task
+    # Scheduler ignores a new launch while an old instance is still alive.
+    # So every popup closes itself at the next 4 AM local time.
+    now = datetime.now()
+    next_4am = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    if next_4am <= now:
+        next_4am += timedelta(days=1)
+    root.after(int((next_4am - now).total_seconds() * 1000), root.destroy)
 
     root.focus_force()
     root.mainloop()

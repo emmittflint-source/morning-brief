@@ -37,6 +37,11 @@ PROJECT_ITEMS = {
          "done_when": "chapter 6 is finished before Thursday's meeting",
          "due": None, "raw_due": None, "time": "60 min"},
     ],
+    "Car Trouble": [
+        {"next_action": "Renew the car registration",
+         "done_when": "the new sticker is on the plate",
+         "due": None, "raw_due": None, "time": "20 min", "urgent": True},
+    ],
     "Garage Cleanout": [
         {"next_action": "Sort the tools into keep, donate, and toss piles",
          "done_when": "all three piles exist and the workbench is clear",

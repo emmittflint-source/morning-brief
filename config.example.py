@@ -14,6 +14,23 @@ line to that Notion page, not editing any code.
 
 TIMEZONE = "Pacific/Honolulu"  # your own IANA timezone name
 
+# The "Brief Tasks" Notion table: one row per task, with the columns
+# Task, Project, Due, Done when, Urgent, Done, and Time (see README.md).
+# Paste the table's ID here (the 32-character code in its page URL).
+# When this is set it is the ONLY source of tasks. Leave it as the
+# placeholder to keep using the older per-project pages (INDEX_PAGE_ID
+# below) instead.
+TASKS_DATABASE_ID = "PASTE_YOUR_TASKS_TABLE_ID_HERE"
+
+# How calendar times are shown: "12h" gives 2:30 PM, "24h" gives 14:30.
+TIME_FORMAT = "12h"
+
+# How many normal (non-urgent) tasks a single project may fill in the
+# top three, so one busy project can't take every slot. Urgent tasks
+# ignore this limit entirely.
+PER_PROJECT_LIMIT = 1
+
+# OLDER WAY, only used when TASKS_DATABASE_ID is not set:
 # The one thing this script needs a hardcoded pointer to: a Notion page
 # with one "Project Name - <link to that project's page>" line per
 # project you want the brief to read from. See README.md for exactly

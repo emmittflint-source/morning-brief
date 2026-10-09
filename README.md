@@ -1,29 +1,41 @@
 # Morning brief
 
-A personal daily agent that reads a "Next actions" list off your own
-Notion pages, checks your Google Calendar, and shows you a short
-summary each morning: today's events, your top 3 most urgent tasks
-(by due date), and one more picked in rotation so nothing gets
-permanently buried.
+A personal daily agent that reads your open tasks from one Notion
+table, checks your Google Calendar, and shows you a short summary each
+morning: today's events, your most urgent tasks, and one more picked in
+rotation so nothing gets permanently buried.
 
 **Read-only.** It never writes to Notion or your calendar, only reads.
 
 ## How it decides what to show you
 
-- Every project you track gets one line on a Notion "index" page:
-  `Project Name - <link to that project's Notion page>`.
-- Each project's own page has a section starting with a line that says
-  exactly **"Next actions"** (a heading or plain paragraph, either
-  works), followed by a numbered or bulleted list, one item per task.
-  Each item can optionally have `Done when: ...`, `Due: ...`, and
-  `Time: ...` as sub-lines under it.
-- Every run: the 3 soonest-due items win the top slots (one project
-  can only take one of the 3 slots, so a single busy project can't
-  crowd everything else out), and a 4th slot rotates fairly among
-  whatever's left with no due date at all, so those don't just sit
-  invisible forever.
-- Add a new project any time by adding one line to the index page.
-  No code ever needs to change for that.
+Your tasks live in one Notion table called **Brief Tasks**, one row per
+task:
+
+| Column | What it is |
+|---|---|
+| Task | What to do (the title) |
+| Project | Which project it belongs to. Pick one, or type a new name to create it |
+| Due | Optional date |
+| Done when | How you'll know it's finished. Shown in the brief |
+| Urgent | Tick to make it jump the line |
+| Done | Tick when finished. The brief ignores ticked rows |
+| Time | Optional estimate, e.g. `30 min` |
+
+Every run, in this order:
+
+1. **Urgent tasks** come first, soonest due date first, undated ones
+   last. They ignore both the one-per-project limit and the three-line
+   limit, so six urgent tasks means six lines. They count toward the
+   three, so one urgent task leaves two normal lines.
+2. **Normal tasks with a due date** fill the rest of the three lines,
+   soonest first, at most one per project (so one busy project can't
+   take every line). Raise that with `PER_PROJECT_LIMIT` in `config.py`.
+3. **One rotation line**, always last: a task from a project that has
+   nothing with a due date, chosen by day of year so each gets a turn.
+
+Adding a task is adding a row. Adding a project is typing a new name in
+the Project column. Retiring a task is ticking Done. No code changes.
 
 ## Setup
 
@@ -38,23 +50,35 @@ cp config.example.py config.py       # Mac/Linux
 copy config.example.py config.py     # Windows
 ```
 
-`config.py` is gitignored on purpose, your personal Notion page ID
+`config.py` is gitignored on purpose, your personal Notion table ID
 never gets committed, whether you're the original author or someone
 who forked this.
 
-### 1. Create your project index page in Notion
+### 1. Create your Brief Tasks table in Notion
 
-Make a new Notion page. Add one line per project, in this exact shape
-(paste a real link to each project's page, don't just type the URL as
-plain text, let Notion turn it into an actual page mention):
+Make a new Notion page and add a table (a database) to it, called
+**Brief Tasks**, with exactly these columns and types. The names and
+types matter, the brief finds columns by name:
 
-```
-My Side Project - <link to that page>
-Fitness Goals - <link to that page>
-```
+- `Task` (the title column that every table starts with)
+- `Project` (type: Select)
+- `Due` (type: Date)
+- `Done when` (type: Text)
+- `Urgent` (type: Checkbox)
+- `Done` (type: Checkbox)
+- `Time` (type: Text)
 
-Copy that index page's ID (the 32-character string in its URL) into
-`INDEX_PAGE_ID` in your `config.py`.
+Then copy the table's ID, the 32-character code in its page URL, into
+`TASKS_DATABASE_ID` in your `config.py`.
+
+**Quick check:** `python check_notion_access.py` reads the table and
+warns about a missing column, a row with no Project, or a Due value it
+can't read as a date.
+
+*Older way, still supported:* if `TASKS_DATABASE_ID` is left as the
+placeholder, the brief instead reads a project index page
+(`INDEX_PAGE_ID`) where each project links to a page with a "Next
+actions" list. The table is simpler and is what to use for anything new.
 
 ### 2. Get a Notion token
 
@@ -103,16 +127,15 @@ to get a fresh token, the one issued while still in Testing keeps its
 ## Testing before you trust it
 
 ```
-python check_notion_access.py     # confirms the index page and every listed project page are readable
+python check_notion_access.py     # confirms your Brief Tasks table is readable and flags problems
 python morning_brief.py --mock            # no network calls at all, uses fake example data
 python morning_brief.py --skip-calendar   # real Notion, fake calendar, for testing before Calendar's set up
 python morning_brief.py                   # the real thing
 ```
 
-Run `check_notion_access.py` any time you add a project or change
-something on the index page, it checks each page independently, so
-one broken page won't hide behind a wall of noise from the other
-working ones.
+Run `check_notion_access.py` after changing the table's columns. To try
+a table without editing `config.py`, pass its ID:
+`python morning_brief.py --skip-calendar --table <table id>`.
 
 ## Seeing it as a popup instead of terminal text
 
@@ -125,15 +148,38 @@ a separate process that never sees session-only variables).
 
 ## Running it daily, unattended
 
-**Windows (tested):** Task Scheduler, a daily trigger at whatever
-time you want, Action = Start a program, Program/script =
-`pythonw.exe` (not `python.exe`, so no console window flashes behind
-the popup), Add arguments = the full path to `run_daily.pyw`. Two
-settings worth getting right: uncheck "Start the task only if the
-computer is on AC power" (or it'll skip mornings on battery), and
-check "Run task as soon as possible after a scheduled start is
-missed" (so a sleeping laptop catches up instead of silently skipping
-the day).
+**Windows (tested):** Task Scheduler. Action = Start a program,
+Program/script = `pythonw.exe` (not `python.exe`, so no console window
+flashes behind the popup), Add arguments = the full path to
+`run_daily.pyw` in quotes, followed by `--scheduled`. Set "Start in" to
+the project folder.
+
+Triggers (add all that apply, the launcher shows the brief at most once
+per day, never before 6 AM, so extra triggers are harmless):
+
+- **Daily at your chosen time**, for when the computer is awake.
+- **On an event** (New trigger, Begin the task: On an event, Basic):
+  Log `System`, Source `Microsoft-Windows-Power-Troubleshooter`,
+  Event ID `1`. That is the "resumed from sleep" event, so the first
+  time a sleeping laptop wakes up, the brief appears.
+
+Why the second trigger matters: a laptop that sleeps overnight is
+asleep at 7:00, so a clock-time trigger alone never fires. The
+"Run task as soon as possible after a scheduled start is missed"
+checkbox is supposed to cover that, but in testing it worked once and
+then stopped working, so don't rely on it. Triggering on the wake
+event itself does not depend on it.
+
+Other settings worth getting right: uncheck "Start the task only if
+the computer is on AC power" (or it skips mornings on battery), and
+leave "If the task is already running" on "Do not start a new
+instance". Popups close themselves at 4 AM, so an old window can never
+block the next morning.
+
+When something doesn't show up, read `morning_brief.log` (it sits next
+to `run_daily.pyw`). It records every launch, why a run was skipped,
+and any error with its full traceback, which matters because a
+`pythonw.exe` program has no console to show errors in.
 
 **Mac/Linux (untested, but the equivalent):** a cron job calling
 `python morning_brief.py`, the popup won't work as-is since it's
@@ -142,6 +188,10 @@ no-op elsewhere, and Windows-specific cursor names with a fallback),
 but the terminal output works anywhere Python does.
 
 ## Troubleshooting
+
+`dump_database.py` prints the raw columns and values Notion returns for
+the first few rows of your table, use it if `check_notion_access.py`
+reports something odd.
 
 `dump_blocks.py "<page ID or URL>"` prints the raw structure Notion
 actually returns for a page, block types, nesting, everything. Useful
@@ -160,8 +210,10 @@ like a one-line written summary of the day instead of just a sorted
 list, that's a reasonable place to add a small LLM call, this project
 just didn't need one for what it does.
 
-The parser expects the specific Notion structure described above. If
-your own Notion habits look different (a table instead of a list, a
-different section header), `dump_blocks.py` is the tool to figure out
-what actually needs to change in `find_action_item_blocks()` in
+The reader expects the table described above and finds columns by
+name, so renaming one (other than the title column) means the brief
+treats it as empty. `check_notion_access.py` will say so. If your
+Notion habits are different, say a board or a list instead of a table,
+`dump_database.py` shows exactly what Notion sends for each row, which
+is the starting point for adapting `parse_task_row()` in
 `morning_brief.py`.

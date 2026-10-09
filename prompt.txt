@@ -1,0 +1,58 @@
+MORNING BRIEF: CLAUDE PROMPT
+Keep this file up to date. To use it, copy only the text between the START and STOP lines, paste it into a new Claude chat, and attach the project files (everything in the morning_brief folder EXCEPT config.py, which is personal, and any .log files).
+
+Last updated: 2026-10-08 (table version: Task, Project, Due, Done when, Urgent, Done, Time)
+
+WHEN TO UPDATE THIS FILE
+- Changed a column in the Brief Tasks table, or a setting name in config.example.py? Update the table and config rules.
+- Changed how the daily automation is triggered? Update the automation rules.
+- Helped someone and ran into a new gotcha? Add it as a new numbered rule.
+- Added or renamed a file? Update the file names mentioned in the testing rules.
+
+
+===== START COPYING BELOW THIS LINE =====
+
+I want to set up a personal tool called "Morning Brief" on my own computer, using my own accounts. I have the project's files attached to this message. It reads my open tasks from one Notion table and my Google Calendar (read-only, it never writes to either) and shows me a short daily summary: today's calendar events, my most urgent tasks, and one rotating task so nothing gets buried. The attached README.md explains how it works and is the source of truth for setup. The rules below are what to watch for, learned from building and debugging the original.
+
+BEFORE ANYTHING ELSE, ask me these, one at a time, and wait for each answer:
+1. Is my computer Windows or a Mac?
+2. How comfortable am I with computers? (a) I have never used a terminal or installed Python. (b) I can follow technical steps. (c) I'm a developer. Adjust to my answer. For (a): exactly one step at a time, plain language, exact clicks and exact text, wait for me after every step, expect screenshots instead of descriptions. For (b): small groups of steps. For (c): be brief and point me at README.md and config.example.py.
+3. Do I already have Python 3 installed? If not, walk me through installing it from python.org first.
+
+HOW TO WORK WITH ME:
+- Use the files as they are. Do not rewrite or "improve" the code. If something fails, use the included diagnostics (check_notion_access.py, dump_database.py, and the morning_brief.log file once automation is on) to find out why before suggesting any change.
+- Explain any technical term the first time you use it. Keep steps concrete.
+- If anything on my screen doesn't match what you expected (a menu named differently, a button elsewhere), stop and ask for a screenshot instead of guessing. Interfaces change.
+
+HARD RULES:
+
+1. SECRETS. Never ask me to paste a token, password, or key into this chat. Never have me type one into a command, because commands are saved to a history file in plain text. The program reads exactly four variables, use these exact names: NOTION_API_KEY, GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_CALENDAR_REFRESH_TOKEN.
+   - Windows: have me enter them in the Environment Variables settings screen (Start menu, search "environment variables", "Edit environment variables for your account", New under User variables).
+   - Mac: for testing, use  read -s -p "Paste your key here: " NAME  followed by  export NAME  which doesn't echo or save the value.
+   If I'm about to do something that prints a secret on screen, tell me not to screenshot that window.
+
+2. NOTION ACCESS. Guide me to create a "Personal access token" (not an "internal connection"), with only "Read content" selected. It automatically sees every page in my account, so there is no per-page sharing step.
+
+3. THE TASK TABLE. One Notion table (database) named Brief Tasks, with exactly these columns and types, because the program finds columns by name: Task (the title column), Project (Select), Due (Date), Done when (Text), Urgent (Checkbox), Done (Checkbox), Time (Text). Build it with me column by column. Add two real example tasks. Explain: one row per task, ticking Urgent makes it jump the line, ticking Done retires it, a new project is just a new name typed in Project.
+
+4. CONFIG. config.py is my personal copy of config.example.py (my timezone, my TASKS_DATABASE_ID which is the 32-character code in the table page's address, my deadlines). Don't have me edit it in a rich-text editor: on a Mac, TextEdit turns straight quotes into curly ones and breaks the file; on Windows, Notepad can save it as config.py.txt. Instead, write the complete contents for me and give me ONE command that creates the file: Mac, cat > config.py << 'EOF' ... EOF; Windows PowerShell, a here-string piped to Set-Content with -Encoding utf8. The table ID is not a secret.
+
+5. GOOGLE CALENDAR. It needs a real OAuth setup in Google Cloud Console: create a project, enable the Google Calendar API, set up the OAuth consent screen (External, add my own email as a test user), create an OAuth client ID of type "Desktop app". Do these as separate steps, verifying against my screenshots because the screens change. Then run authorize_calendar.py once: it opens my browser, I approve read-only calendar access, and it prints a refresh token.
+
+6. PUBLISH THE GOOGLE APP. While it's in "Testing" status, the refresh token silently expires after 7 days. After everything works, guide me through Audience, Publish app. It requires a homepage URL and a privacy policy URL: two simple public Notion pages work (I have to click "Publish to web" myself, nobody can do it for me). Google's "authorized domain" must be the specific subdomain Notion gives my public page (something.notion.site), not the bare notion.site. Afterwards, re-run authorize_calendar.py once to get a token without the 7-day limit.
+
+7. TEST IN THIS ORDER, and don't move on until each passes: python morning_brief.py --mock (fake data, no accounts), then check_notion_access.py (real table readable, warns about missing columns), then morning_brief.py --skip-calendar (real table, calendar skipped), then the full morning_brief.py. Use python3 on a Mac. If check_notion_access.py reports something I can't make sense of, run dump_database.py and ask me to share the output.
+
+8. PERMANENT VARIABLES. A variable set in one terminal window disappears when it closes and does not reach double-clicked files or scheduled jobs. Once the full run works, make the four variables permanent: Windows via the Environment Variables screen (rule 1); Mac by putting the values directly inside the automation plist file (rule 9).
+
+9. DAILY AUTOMATION.
+   Windows: use Task Scheduler. Action: Start a program. Program: pythonw.exe (not python.exe, so no console window flashes). Arguments: the full path to run_daily.pyw in quotes, followed by  --scheduled . Start in: the project folder. This shows the popup brief. Triggers: a Daily trigger at the time I choose, PLUS an "On an event" trigger (Log: System, Source: Microsoft-Windows-Power-Troubleshooter, Event ID: 1, which is "resumed from sleep"). The second one matters: a laptop that sleeps overnight is asleep at the daily time, and the "run after a missed start" checkbox proved unreliable, so the wake-up event is what makes the brief appear when I first open the laptop. The launcher shows the brief at most once per day and never before 6 AM, so extra triggers are harmless. Also: uncheck "Start the task only if the computer is on AC power", and keep "If the task is already running" on "Do not start a new instance". If a morning is missed, read morning_brief.log in the project folder before guessing.
+   Mac: use launchd. Write the plist file contents for me (do not have me type XML), place it in ~/Library/LaunchAgents/, put the environment variables inside it, run  python3 morning_brief.py , and make it write output to a log file I can open. launchd runs a job missed during sleep when the Mac wakes. Explain the launchctl load command.
+
+10. THE POPUP is a Windows-tested desktop window (run_daily.pyw, popup.py). On a Mac, get the plain text version working first, and only then try the popup as an optional extra.
+
+11. WHEN SOMETHING SEEMS BROKEN, ask what I see and request a screenshot or the log file. Don't guess at a fix, and don't tell me to "just find the equivalent option".
+
+Now begin with question 1.
+
+===== STOP COPYING HERE =====

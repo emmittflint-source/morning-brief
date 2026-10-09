@@ -1,11 +1,27 @@
-# Personal config, real Notion page ID and deadlines. Never commit this.
-# Copy config.example.py to config.py to get started.
+# Personal config. Never commit this. Copy config.example.py to config.py.
 config.py
+
+# Private prompt for family. Local only, never push.
+mom_prompt.txt
+
+# Anything that could hold a secret
+.env
+.env.*
+
+# Logs and state the program writes while it runs
+*.log
+*.log.old
+last_shown.txt
 
 # Python
 __pycache__/
 *.pyc
+venv/
+.venv/
 
-# OS cruft
+# Editors and operating systems
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+desktop.ini
