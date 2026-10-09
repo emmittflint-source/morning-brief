@@ -15,7 +15,7 @@ WHEN TO UPDATE THIS FILE
 I want to set up a personal tool called "Morning Brief" on my own computer, using my own accounts. I have the project's files attached to this message. It reads my open tasks from one Notion table and my Google Calendar (read-only, it never writes to either) and shows me a short daily summary: today's calendar events, my most urgent tasks, and one rotating task so nothing gets buried. The attached README.md explains how it works and is the source of truth for setup. The rules below are what to watch for, learned from building and debugging the original.
 
 BEFORE ANYTHING ELSE, ask me these, one at a time, and wait for each answer:
-1. Is my computer Windows or a Mac?
+1. Is my computer Windows, a Mac, or Linux? (If Linux, which one, for example Ubuntu or Fedora.)
 2. How comfortable am I with computers? (a) I have never used a terminal or installed Python. (b) I can follow technical steps. (c) I'm a developer. Adjust to my answer. For (a): exactly one step at a time, plain language, exact clicks and exact text, wait for me after every step, expect screenshots instead of descriptions. For (b): small groups of steps. For (c): be brief and point me at README.md and config.example.py.
 3. Do I already have Python 3 installed? If not, walk me through installing it from python.org first.
 
@@ -43,15 +43,22 @@ HARD RULES:
 
 7. TEST IN THIS ORDER, and don't move on until each passes: python morning_brief.py --mock (fake data, no accounts), then check_notion_access.py (real table readable, warns about missing columns), then morning_brief.py --skip-calendar (real table, calendar skipped), then the full morning_brief.py. Use python3 on a Mac. If check_notion_access.py reports something I can't make sense of, run dump_database.py and ask me to share the output.
 
-8. PERMANENT VARIABLES. A variable set in one terminal window disappears when it closes and does not reach double-clicked files or scheduled jobs. Once the full run works, make the four variables permanent: Windows via the Environment Variables screen (rule 1); Mac by putting the values directly inside the automation plist file (rule 9).
+8. PERMANENT VARIABLES. A variable set in one terminal window disappears when it closes and does not reach double-clicked files or scheduled jobs. Once the full run works, make the four variables permanent: Windows via the Environment Variables screen (rule 1); Mac by putting the values directly inside the automation plist file (rule 9); Linux as described in rule 12.
 
 9. DAILY AUTOMATION.
    Windows: use Task Scheduler. Action: Start a program. Program: pythonw.exe (not python.exe, so no console window flashes). Arguments: the full path to run_daily.pyw in quotes, followed by  --scheduled . Start in: the project folder. This shows the popup brief. Triggers: a Daily trigger at the time I choose, PLUS an "On an event" trigger (Log: System, Source: Microsoft-Windows-Power-Troubleshooter, Event ID: 1, which is "resumed from sleep"). The second one matters: a laptop that sleeps overnight is asleep at the daily time, and the "run after a missed start" checkbox proved unreliable, so the wake-up event is what makes the brief appear when I first open the laptop. The launcher shows the brief at most once per day and never before 6 AM, so extra triggers are harmless. Also: uncheck "Start the task only if the computer is on AC power", and keep "If the task is already running" on "Do not start a new instance". If a morning is missed, read morning_brief.log in the project folder before guessing.
    Mac: use launchd. Write the plist file contents for me (do not have me type XML), place it in ~/Library/LaunchAgents/, put the environment variables inside it, run  python3 morning_brief.py , and make it write output to a log file I can open. launchd runs a job missed during sleep when the Mac wakes. Explain the launchctl load command.
+   Linux: see rule 12.
 
-10. THE POPUP is a Windows-tested desktop window (run_daily.pyw, popup.py). On a Mac, get the plain text version working first, and only then try the popup as an optional extra.
+10. THE POPUP is a Windows-tested desktop window (run_daily.pyw, popup.py). On a Mac or Linux, get the plain text version working first, and only then try the popup as an optional extra.
 
 11. WHEN SOMETHING SEEMS BROKEN, ask what I see and request a screenshot or the log file. Don't guess at a fix, and don't tell me to "just find the equivalent option".
+
+12. LINUX (parts of this also apply to Python installed through Homebrew on a Mac).
+   - Packages: newer Linux versions make pip refuse to install into the system Python with an "externally-managed-environment" error. Don't work around it with --break-system-packages. Create a virtual environment in the project folder (python3 -m venv .venv), activate it, then run pip install -r requirements.txt. The scheduled job must then call that environment's python (.venv/bin/python), not the system one. Tell me this before I hit the error.
+   - Secrets: for testing, use read -s and export (rule 1). For the daily job, have me save the four variables in a file only I can read (chmod 600) and point the service file at it. Don't put the values inside the service file or config.py.
+   - Scheduling: use a systemd user timer with OnCalendar set to the time I choose and Persistent=true, and write the .service and .timer files for me. Plain cron skips any run that falls while the machine is asleep or off, so only suggest cron for a machine that is always on. Show me how to check the result with systemctl --user status and the log.
+   - Popup: Tkinter is often not installed by default (Debian or Ubuntu: sudo apt install python3-tk; Fedora: sudo dnf install python3-tkinter; Homebrew Python on a Mac: brew install python-tk). The popup is untested on Linux, so start with the plain text output.
 
 Now begin with question 1.
 

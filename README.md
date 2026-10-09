@@ -181,11 +181,25 @@ to `run_daily.pyw`). It records every launch, why a run was skipped,
 and any error with its full traceback, which matters because a
 `pythonw.exe` program has no console to show errors in.
 
-**Mac/Linux (untested, but the equivalent):** a cron job calling
-`python morning_brief.py`, the popup won't work as-is since it's
-built with Windows quirks in mind (a DPI-awareness fix that's a
-no-op elsewhere, and Windows-specific cursor names with a fallback),
-but the terminal output works anywhere Python does.
+**Mac (untested):** launchd. A small plist file in `~/Library/LaunchAgents/`
+runs `python3 morning_brief.py` at the time you choose and writes its
+output to a log file. launchd runs a job it missed during sleep when
+the Mac wakes. The environment variables go inside the plist, since a
+Terminal window's variables don't reach background jobs.
+
+**Linux (untested):** a systemd user timer with `OnCalendar=` and
+`Persistent=true`, or cron. Cron skips any run that falls while the
+machine is asleep or off, so the timer is the better choice for a
+laptop. If `pip` refuses to install with an "externally-managed-
+environment" error, create a virtual environment (`python3 -m venv
+.venv`) and have the scheduled job call `.venv/bin/python`.
+
+On Mac and Linux, `morning_brief.py` prints plain text and has no
+once-a-day rule, since that lives in the Windows launcher
+(`run_daily.pyw`). The popup (`popup.py`) is only tested on Windows, it
+asks for the Segoe UI font and uses Windows-specific window handling,
+so it will look and behave differently elsewhere. Tkinter may also
+need installing (`python3-tk` on Debian or Ubuntu).
 
 ## Troubleshooting
 
