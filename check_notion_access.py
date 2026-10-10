@@ -143,6 +143,11 @@ def main():
     else:
         check_legacy_pages()
 
+    import discord_notify
+    print()
+    for line in discord_notify.status_lines():
+        print(line)
+
 
 if __name__ == "__main__":
     main()

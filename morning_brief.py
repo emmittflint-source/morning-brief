@@ -692,7 +692,8 @@ def gather_brief_data(today: date, mock: bool, skip_calendar: bool = False) -> d
     }
 
 
-def run(today: date, mock: bool, skip_calendar: bool = False):
+def run_full(today: date, mock: bool, skip_calendar: bool = False):
+    """The brief text AND the raw data behind it (the Discord message is built from the data)."""
     data = gather_brief_data(today, mock, skip_calendar)
     brief = format_brief(
         today, data["events"], data["top3"], data["rotation_entry"],
@@ -712,7 +713,11 @@ def run(today: date, mock: bool, skip_calendar: bool = False):
     if sys.stderr is not None:
         sys.stderr.write(f"(brief is {word_count(brief)} words)\n")
 
-    return brief
+    return brief, data
+
+
+def run(today: date, mock: bool, skip_calendar: bool = False):
+    return run_full(today, mock, skip_calendar)[0]
 
 
 def main():
@@ -721,6 +726,10 @@ def main():
     parser.add_argument("--mock", action="store_true", help="use mock_data.py, no network calls")
     parser.add_argument("--table", metavar="ID",
                          help="try the Brief Tasks table with this ID without editing config.py")
+    parser.add_argument("--discord", action="store_true",
+                         help="also send the brief to Discord (needs DISCORD_ENABLED = True, see README.md)")
+    parser.add_argument("--discord-test", action="store_true",
+                         help="send one short test message to Discord and stop")
     parser.add_argument("--skip-calendar", action="store_true",
                          help="real Notion, but skip Calendar (for testing before Calendar OAuth is set up)")
     args = parser.parse_args()
@@ -731,13 +740,26 @@ def main():
     tz = ZoneInfo(config.TIMEZONE)
     today = dateparser.parse(args.date).date() if args.date else datetime.now(tz).date()
 
+    if args.discord_test:
+        import discord_notify
+        sys.exit(0 if discord_notify.cli_send_test() else 1)
+
     try:
-        brief = run(today, args.mock, skip_calendar=args.skip_calendar)
+        brief, data = run_full(today, args.mock, skip_calendar=args.skip_calendar)
     except (FetchError, ConfigError) as e:
         print(str(e))
+        if args.discord:
+            # A broken morning should not be silent on the phone either.
+            import discord_notify
+            discord_notify.cli_send_error(str(e))
         sys.exit(1)
 
     print(brief)
+
+    if args.discord:
+        import discord_notify
+        if not discord_notify.cli_send_brief(today, data):
+            sys.exit(1)
 
 
 if __name__ == "__main__":

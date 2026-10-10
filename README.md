@@ -201,6 +201,54 @@ asks for the Segoe UI font and uses Windows-specific window handling,
 so it will look and behave differently elsewhere. Tkinter may also
 need installing (`python3-tk` on Debian or Ubuntu).
 
+## Optional: get the brief on your phone (Discord)
+
+The brief can also post to a private Discord channel and @mention you, so
+your phone gets a notification. It is **off by default**, and it only
+posts, it never reads anything from Discord.
+
+1. In Discord, make a private server (or use one only you can see) and
+   a channel for the brief. The message contains your task text, so
+   keep it private, and don't mute that channel.
+2. In that channel: Settings (the gear), Integrations, Webhooks, New
+   Webhook, Copy Webhook URL. **Treat that link like a password.**
+   Anyone holding it can post to your channel. Never paste it into a
+   chat or commit it anywhere.
+3. Your user ID: Discord Settings, Advanced, turn on Developer Mode,
+   then right-click your own name and choose Copy User ID.
+4. Save two environment variables, the same way as the others:
+   `DISCORD_WEBHOOK_URL` (the secret link) and `DISCORD_USER_ID`
+   (the digits).
+5. In `config.py`, change `DISCORD_ENABLED = False` to `True`. This is
+   the master switch: while it is `False`, nothing is ever sent, even if
+   a scheduled task passes `--discord`.
+6. Test it: `python morning_brief.py --discord-test` sends one short
+   message. Your phone should buzz. Then
+   `python morning_brief.py --discord` sends today's real brief.
+
+Notes:
+- On the command line (`morning_brief.py`), sending needs both the
+  switch and the `--discord` flag, so routine terminal runs never ping
+  you by accident.
+- On Windows, the popup launcher (`run_daily.pyw`) sends too whenever
+  the switch is on, with no flag. It sends at most one brief per day,
+  even if you double-click it five times, and it sends in the
+  background so the popup never waits for Discord. A *scheduled* run
+  that fails sends one error notice per day (a manual failure doesn't,
+  since you're looking right at it). Check `morning_brief.log` for
+  lines like `Discord (brief) sent` or `Discord (brief) failed: ...`.
+- If the run fails (a rejected token, Notion down), the phone gets a
+  "Morning brief could not run" message with the reason instead.
+- For a notification at a fixed time like 7:00, schedule
+  `python morning_brief.py --discord` on a machine that is always on.
+  A laptop that sleeps overnight would only send when you open it.
+  Turn the switch on for **one** machine only, or you'll get duplicates.
+- Messages are shortened to fit Discord's 2000-character limit, and a
+  message can only ever @mention the one user ID you set, whatever the
+  task text says.
+- `python check_notion_access.py` reports whether Discord is off, ready,
+  or missing something, without sending anything.
+
 ## Troubleshooting
 
 `dump_database.py` prints the raw columns and values Notion returns for

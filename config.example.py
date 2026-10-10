@@ -25,6 +25,14 @@ TASKS_DATABASE_ID = "PASTE_YOUR_TASKS_TABLE_ID_HERE"
 # How calendar times are shown: "12h" gives 2:30 PM, "24h" gives 14:30.
 TIME_FORMAT = "12h"
 
+# OPTIONAL: also post the brief to a private Discord channel and @mention you,
+# so it reaches your phone. OFF by default. This is the master switch: while
+# it is False, nothing is ever sent, even if a scheduled task passes
+# --discord. To use it, see "Optional: get the brief on your phone" in
+# README.md, then change this to True. Turn it on for ONE machine only (one
+# that stays on), or you will get duplicates.
+DISCORD_ENABLED = False
+
 # How many normal (non-urgent) tasks a single project may fill in the
 # top three, so one busy project can't take every slot. Urgent tasks
 # ignore this limit entirely.

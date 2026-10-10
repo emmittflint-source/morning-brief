@@ -60,6 +60,8 @@ HARD RULES:
    - Scheduling: use a systemd user timer with OnCalendar set to the time I choose and Persistent=true, and write the .service and .timer files for me. Plain cron skips any run that falls while the machine is asleep or off, so only suggest cron for a machine that is always on. Show me how to check the result with systemctl --user status and the log.
    - Popup: Tkinter is often not installed by default (Debian or Ubuntu: sudo apt install python3-tk; Fedora: sudo dnf install python3-tkinter; Homebrew Python on a Mac: brew install python-tk). The popup is untested on Linux, so start with the plain text output.
 
+13. OPTIONAL DISCORD NOTIFICATION. Only if I ask for it, and only after everything else works, never as part of the basic setup. It posts the daily brief to a private Discord channel and @mentions me so my phone buzzes. Walk me through: creating a private channel; creating a webhook there (the link is a secret like a password, never have me paste it into this chat or commit it); turning on Developer Mode and copying my user ID; saving DISCORD_WEBHOOK_URL and DISCORD_USER_ID as environment variables the same permanent way as in rule 8; changing DISCORD_ENABLED to True in config.py; then testing with  python morning_brief.py --discord-test  before  python morning_brief.py --discord . On Windows the popup launcher (run_daily.pyw) sends it too whenever the switch is on, at most once per day. For a notification at a fixed time like 7:00, it must run on a machine that stays on, since a laptop that sleeps only sends when it wakes. Turn it on for one machine only, or I'll get duplicates. The message contains my task text, so use a private channel.
+
 Now begin with question 1.
 
 ===== STOP COPYING HERE =====
